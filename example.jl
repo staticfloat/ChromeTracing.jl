@@ -9,7 +9,7 @@ output_path = joinpath(@__DIR__, "example_trace.json")
 rm(output_path; force=true)
 
 # Start a background streaming writer.
-stream_trace(output_path; max_buffer = 5000, flush_interval = 0.05)
+stream_trace(output_path; capacity = 5000, flush_interval = 0.05)
 
 # Emit a few scalar events.
 @tracepoint "app.start" cat = "app" ph = "i" args = Dict("message" => "service started")

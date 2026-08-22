@@ -4,52 +4,53 @@ using JSON
 using Base.Threads
 
 export @tracepoint
-export save_trace, stream_trace, flush_trace!, stop_streaming!, clear_trace!, total_dropped
+export save_trace, stream_trace, flush_trace!, stop_streaming!, clear_trace!
 
 # Default maximum number of events we'll buffer in memory at once
 const DEFAULT_BUFFER_LIMIT = 100_000
 
-# How often we'll 
+# How often the background writer flushes buffered events.
 const DEFAULT_STREAM_FLUSH_INTERVAL = 0.1
 
-mutable struct ThreadBuffer
-    buffers::Vector{Vector{Dict{String,Any}}}
-    locks::Vector{ReentrantLock}
-    active_idx::Threads.Atomic{Int}
-    max_buffer::Threads.Atomic{Int}
-    dropped::Threads.Atomic{Int}
-end
-
 mutable struct StreamState
-    path::Union{Nothing,String}
-    buffers::Vector{ThreadBuffer}
+    slots::Vector{Union{Nothing,Dict{String,Any}}}
+    # Per-slot publish sequence. Writers set this after storing the event, so
+    # the drain can tell whether a slot contains the current lap's event or is
+    # still in-flight without taking a lock.
+    slot_seq::Vector{Threads.Atomic{Int}}
+    write_idx::Threads.Atomic{Int}
+    read_idx::Threads.Atomic{Int}
+    draining::Threads.Atomic{Int}
+    capacity::Int
+    dropped::Threads.Atomic{Int}
     task::Union{Nothing,Task}
     stop::Base.RefValue{Bool}
+    io::Union{Nothing,IOStream}
+    file_has_events::Bool
 end
 
 const _stream_state = Ref{Union{Nothing,StreamState}}(nothing)
 
-function _make_thread_buffers(n::Int, max_buffer::Int)
-    return [
-        ThreadBuffer(
-            [Dict{String,Any}[], Dict{String,Any}[]],
-            [Base.ReentrantLock(), Base.ReentrantLock()],
-            Threads.Atomic{Int}(1),
-            Threads.Atomic{Int}(max_buffer),
-            Threads.Atomic{Int}(0),
-        ) for _ in 1:n
-    ]
-end
-
-function _thread_shard_index(buffers)
-    return mod1(Threads.threadid(), length(buffers))
+function _make_stream_state(capacity::Int)
+    return StreamState(
+        Union{Nothing,Dict{String,Any}}[nothing for _ in 1:capacity],
+        [Threads.Atomic{Int}(0) for _ in 1:capacity],
+        Threads.Atomic{Int}(0),
+        Threads.Atomic{Int}(0),
+        Threads.Atomic{Int}(0),
+        capacity,
+        Threads.Atomic{Int}(0),
+        nothing,
+        Ref(false),
+        nothing,
+        false,
+    )
 end
 
 function _ensure_stream_state()
     state = _stream_state[]
     if state === nothing
-        buffers = _make_thread_buffers(max(1, Threads.nthreads()), DEFAULT_BUFFER_LIMIT)
-        state = StreamState(nothing, buffers, nothing, Ref(false))
+        state = _make_stream_state(DEFAULT_BUFFER_LIMIT)
         _stream_state[] = state
     end
     return state
@@ -122,65 +123,72 @@ function _write_json_array(path, events)
     return length(events)
 end
 
-function _reset_buffers!(buffers)
-    for shard in buffers
-        for i in 1:2
-            Base.lock(shard.locks[i])
-            try
-                empty!(shard.buffers[i])
-            finally
-                Base.unlock(shard.locks[i])
-            end
-        end
-        shard.active_idx[] = 1
-        shard.dropped[] = 0
+function _reset_buffer!(stream::StreamState)
+    for i in eachindex(stream.slots)
+        stream.slots[i] = nothing
+        stream.slot_seq[i][] = 0
     end
+    stream.write_idx[] = 0
+    stream.read_idx[] = 0
+    stream.draining[] = 0
+    stream.dropped[] = 0
     return nothing
 end
 
-function _drain_shard!(shard::ThreadBuffer)
-    old_idx = Threads.atomic_xchg!(shard.active_idx, shard.active_idx[] == 1 ? 2 : 1)
-    Base.lock(shard.locks[old_idx])
-    try
-        events = copy(shard.buffers[old_idx])
-        empty!(shard.buffers[old_idx])
-        return events
-    finally
-        Base.unlock(shard.locks[old_idx])
+function _drain_buffer!(stream::StreamState)
+    # Don't allow multiple threads to drain at the same time
+    if Threads.atomic_cas!(stream.draining, 0, 1) != 0
+        return Dict{String,Any}[]
     end
-end
 
-function _drain_buffers(buffers)
     events = Dict{String,Any}[]
-    for shard in buffers
-        shard_events = _drain_shard!(shard)
-        if !isempty(shard_events)
-            append!(events, shard_events)
+
+    try
+        while true
+            read_pos = stream.read_idx[]
+            write_pos = stream.write_idx[]
+            if read_pos >= write_pos
+                break
+            end
+
+            slot = mod1(read_pos + 1, stream.capacity)
+            expected_seq = read_pos + 1
+            # If the sequence has not advanced yet, the writer has reserved the
+            # slot but not finished publishing the event.
+            if stream.slot_seq[slot][] != expected_seq
+                break
+            end
+
+            event = stream.slots[slot]
+            if event !== nothing
+                push!(events, event)
+            end
+            stream.slots[slot] = nothing
+            stream.slot_seq[slot][] = 0
+            stream.read_idx[] = read_pos + 1
         end
+    finally
+        stream.draining[] = 0
     end
+
     return events
 end
 
-function _append_event!(buffers, event)
-    idx = _thread_shard_index(buffers)
-    shard = buffers[idx]
+function _append_event!(stream::StreamState, event)
     while true
-        active = shard.active_idx[]
-        Base.lock(shard.locks[active])
-        try
-            current = shard.active_idx[]
-            if current != active
-                continue
-            end
-            buffer = shard.buffers[active]
-            if length(buffer) >= shard.max_buffer[]
-                Threads.atomic_add!(shard.dropped, 1)
-                return false
-            end
-            push!(buffer, event)
+        write_pos = stream.write_idx[]
+        read_pos = stream.read_idx[]
+        if (write_pos - read_pos) >= stream.capacity
+            Threads.atomic_add!(stream.dropped, 1)
+            return false
+        end
+
+        if Threads.atomic_cas!(stream.write_idx, write_pos, write_pos + 1) == write_pos
+            slot = mod1(write_pos + 1, stream.capacity)
+            stream.slots[slot] = event
+            # Publish the slot only after the event is written.
+            stream.slot_seq[slot][] = write_pos + 1
             return true
-        finally
-            Base.unlock(shard.locks[active])
         end
     end
 end
@@ -191,8 +199,7 @@ function clear_trace!()
         return nothing
     end
     stop_streaming!()
-    _reset_buffers!(stream.buffers)
-    stream.path = nothing
+    _reset_buffer!(stream)
     return nothing
 end
 
@@ -201,7 +208,7 @@ function snapshot_default_buffer()
     if stream === nothing
         return Dict{String,Any}[]
     end
-    return _drain_buffers(stream.buffers)
+    return _drain_buffer!(stream)
 end
 
 function save_trace(path)
@@ -211,81 +218,39 @@ function save_trace(path)
     return length(events)
 end
 
-function _append_stream_file(path, events; finalize::Bool=false)
-    if isempty(events)
+function _flush_stream_state(stream::StreamState; finalize::Bool=false)
+    io = stream.io
+    if io === nothing
         return 0
     end
-
-    mkpath(dirname(abspath(path)))
-
-    separator = ",\n"
-    if !isfile(path) || filesize(path) == 0
-        separator = "[\n"
-    end
-
-    open(path, "a") do io
-        write(io, separator)
+    events = _drain_buffer!(stream)
+    if !isempty(events)
+        if stream.file_has_events
+            write(io, ",\n")
+        end
         for (idx, event) in enumerate(events)
             if idx > 1
                 write(io, ",\n")
             end
             write(io, JSON.json(event))
         end
+        stream.file_has_events = true
     end
-
     if finalize
-        open(path, "a") do io
-            write(io, "\n]\n")
-        end
+        write(io, "\n]\n")
+        close(io)
+        stream.io = nothing
+        stream.file_has_events = false
     end
-
     return length(events)
-end
-
-function _flush_stream_state(stream::StreamState; finalize::Bool=false)
-    if stream.path === nothing
-        return 0
-    end
-    events = _drain_buffers(stream.buffers)
-    if !isempty(events)
-        return _append_stream_file(stream.path::String, events; finalize=finalize)
-    end
-    if finalize && isfile(stream.path)
-        raw = read(stream.path, String)
-        if !isempty(raw) && !endswith(raw, "]")
-            open(stream.path, "a") do io
-                write(io, "]")
-            end
-        elseif isempty(raw)
-            open(stream.path, "w") do io
-                write(io, "[]")
-            end
-        end
-    end
-    return 0
-end
-
-function total_dropped(stream::StreamState)
-    total = 0
-    for shard in stream.buffers
-        Base.lock(shard.locks[1])
-        Base.lock(shard.locks[2])
-        try
-            total += shard.dropped[]
-        finally
-            Base.unlock(shard.locks[2])
-            Base.unlock(shard.locks[1])
-        end
-    end
-    return total
 end
 
 function flush_trace!()
     stream = _stream_state[]
-    if stream === nothing
+    if stream === nothing || stream.io === nothing
         return 0
     end
-    return _flush_stream_state(stream; finalize=true)
+    return _flush_stream_state(stream; finalize=false)
 end
 
 function stop_streaming!()
@@ -299,23 +264,21 @@ function stop_streaming!()
     if task !== nothing
         wait(task)
     end
-    if stream.path !== nothing
-        _flush_stream_state(stream; finalize=true)
-    end
-    stream.path = nothing
+    _flush_stream_state(stream; finalize=true)
     return nothing
 end
 
-function stream_trace(path; max_buffer=DEFAULT_BUFFER_LIMIT, flush_interval=DEFAULT_STREAM_FLUSH_INTERVAL)
+function stream_trace(path; capacity=DEFAULT_BUFFER_LIMIT, flush_interval=DEFAULT_STREAM_FLUSH_INTERVAL)
     p = String(path)
     stream = _ensure_stream_state()
     if stream.task !== nothing
         stop_streaming!()
     end
-    for shard in stream.buffers
-        shard.max_buffer[] = max_buffer
-    end
-    stream.path = p
+    stream.capacity = capacity
+    mkpath(dirname(abspath(p)))
+    stream.io = open(p, "w")
+    write(stream.io, "[\n")
+    stream.file_has_events = false
     stream.stop[] = false
     stream.task = @async begin
         while !stream.stop[]
@@ -331,7 +294,7 @@ function record_trace(name; kwargs...)
     event = build_event(name; kwargs...)
 
     stream = _ensure_stream_state()
-    _append_event!(stream.buffers, event)
+    _append_event!(stream, event)
     return nothing
 end
 

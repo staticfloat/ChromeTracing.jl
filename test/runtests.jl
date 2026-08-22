@@ -56,23 +56,24 @@ end
 @testset "ChromeTracing stream_trace drops when overloaded" begin
     reset_all!()
     path = joinpath(mktempdir(), "stream_trace.json")
-    stream = stream_trace(path; max_buffer = 25, flush_interval = 0.25)
+    stream = stream_trace(path; capacity = 25, flush_interval = 0.25)
     for i in 1:500
         @tracepoint "stream_event_$(i)" cat = "stream" ph = "i"
     end
     sleep(0.05)
-    @test total_dropped(stream) > 0
+    total_dropped = stream.dropped[]
+    @test total_dropped > 0
     written = flush_trace!()
     @test written <= 25
+    stop_streaming!()
     data = JSON.parsefile(path)
     @test length(data) <= 25
-    stop_streaming!()
 end
 
 @testset "ChromeTracing threaded stream writes valid Chrome trace" begin
     reset_all!()
     path = joinpath(mktempdir(), "threaded_stream_valid.json")
-    stream = stream_trace(path; max_buffer = 5000, flush_interval = 0.02)
+    stream = stream_trace(path; capacity = 5000, flush_interval = 0.02)
 
     workers = 6
     iterations = 250
@@ -105,5 +106,4 @@ end
     raw = read(path, String)
     @test startswith(raw, "[")
     @test endswith(strip(raw), "]")
-    @test total_dropped(stream) >= 0
 end
