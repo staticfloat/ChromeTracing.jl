@@ -1,5 +1,9 @@
 # ChromeTracing.jl
 
+[![CI](https://github.com/staticfloat/ChromeTracing.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/staticfloat/ChromeTracing.jl/actions/workflows/CI.yml)
+[![codecov](https://codecov.io/gh/staticfloat/ChromeTracing.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/staticfloat/ChromeTracing.jl)
+[![Docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://staticfloat.github.io/ChromeTracing.jl)
+
 Package for tracing Julia programs and writing those traces out as Chrome Trace Viewer JSON files.
 
 ## Quick start
@@ -28,28 +32,3 @@ You can also drag-and-drop it into perfetto at `https://ui.perfetto.dev`.
 julia --threads=auto --project=. example.jl
 ```
 
-## Documentation
-
-Full API documentation is built with [Documenter](https://documenter.juliadocs.org/)
-and published to GitLab Pages by CI from the default branch.
-
-To build it locally:
-
-```bash
-julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
-julia --project=docs docs/make.jl
-```
-
-The rendered site lands in `docs/build/`.
-
-## Development
-
-Run the test suite:
-
-```bash
-julia --project=. --threads=4 -e 'using Pkg; Pkg.test()'
-```
-
-CI is configured in [`.gitlab-ci.yml`](.gitlab-ci.yml) and runs the tests against
-Julia 1.10, 1.11 and 1.12 (plus `latest` as a non-blocking job), reports
-coverage, and builds and deploys the docs.
