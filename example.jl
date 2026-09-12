@@ -12,20 +12,20 @@ rm(output_path; force=true)
 stream_trace(output_path; capacity = 5000, flush_interval = 0.05)
 
 # Emit a few scalar events.
-@tracepoint "app.start" cat = "app" ph = "i" args = Dict("message" => "service started")
+@trace_event "app.start" cat = "app" ph = "i" args = Dict("message" => "service started")
 
 @sync for worker in 1:6
     Threads.@spawn begin
         for i in 1:60
-            @tracepoint "worker_$(worker)_tick" cat = "worker" ph = "i" args = Dict("worker" => worker, "iteration" => i)
+            @trace_event "worker_$(worker)_tick" cat = "worker" ph = "i" args = Dict("worker" => worker, "iteration" => i)
             sleep(0.0001)
         end
 
         for i in 1:12
-            @tracepoint "worker_$(worker)_span1_$(i)" cat = "worker" begin
-                @tracepoint "worker_$(worker)_span2_$(i)" cat = "worker" begin
+            @trace_event "worker_$(worker)_span1_$(i)" cat = "worker" begin
+                @trace_event "worker_$(worker)_span2_$(i)" cat = "worker" begin
                     sleep(0.001)
-                    @tracepoint "worker_$(worker)_span3_$(i)" cat = "worker" begin
+                    @trace_event "worker_$(worker)_span3_$(i)" cat = "worker" begin
                         sleep(0.001)
                     end
                 end
@@ -37,8 +37,8 @@ stream_trace(output_path; capacity = 5000, flush_interval = 0.05)
 end
 
 # A more explicit span pair.
-@tracepoint "render.begin" cat = "ui" ph = "B" args = Dict("screen" => "main")
-@tracepoint "render.end" cat = "ui" ph = "E"
+@trace_event "render.begin" cat = "ui" ph = "B" args = Dict("screen" => "main")
+@trace_event "render.end" cat = "ui" ph = "E"
 
 # Flush remaining data to disk.
 stop_streaming!()

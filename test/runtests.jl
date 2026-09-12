@@ -9,7 +9,7 @@ end
 @testset "ChromeTracing default buffer" begin
     reset_all!()
     for i in 1:10
-        @tracepoint "default_event_$(i)" cat = "test"
+        @trace_event "default_event_$(i)" cat = "test"
     end
     path = joinpath(mktempdir(), "trace.json")
     saved = save_trace(path)
@@ -24,7 +24,7 @@ end
     @sync for tid in 1:8
         Threads.@spawn begin
             for i in 1:100
-                @tracepoint "thread_event_$(tid)_$(i)" cat = "threaded" ph = "i"
+                @trace_event "thread_event_$(tid)_$(i)" cat = "threaded" ph = "i"
             end
         end
     end
@@ -37,9 +37,9 @@ end
     @test all(d["tid"] isa Int for d in data)
 end
 
-@testset "ChromeTracing block-form tracepoint emits B/E spans" begin
+@testset "ChromeTracing block-form trace_event emits B/E spans" begin
     reset_all!()
-    @tracepoint "block_span" cat = "block" begin
+    @trace_event "block_span" cat = "block" begin
         sleep(0.001)
     end
     path = joinpath(mktempdir(), "block_trace.json")
@@ -58,7 +58,7 @@ end
     path = joinpath(mktempdir(), "stream_trace.json")
     stream = stream_trace(path; capacity = 25, flush_interval = 0.25)
     for i in 1:500
-        @tracepoint "stream_event_$(i)" cat = "stream" ph = "i"
+        @trace_event "stream_event_$(i)" cat = "stream" ph = "i"
     end
     sleep(0.05)
     total_dropped = stream.dropped[]
@@ -80,11 +80,11 @@ end
     @sync for worker in 1:workers
         Threads.@spawn begin
             for i in 1:iterations
-                @tracepoint "worker_$(worker)_event_$(i)" cat = "parallel" ph = "i" args = Dict("worker" => worker, "iteration" => i)
+                @trace_event "worker_$(worker)_event_$(i)" cat = "parallel" ph = "i" args = Dict("worker" => worker, "iteration" => i)
             end
             for i in 1:10
-                @tracepoint "worker_$(worker)_span_$(i)" cat = "parallel" ph = "B" dur = 5
-                @tracepoint "worker_$(worker)_span_$(i)" cat = "parallel" ph = "E"
+                @trace_event "worker_$(worker)_span_$(i)" cat = "parallel" ph = "B" dur = 5
+                @trace_event "worker_$(worker)_span_$(i)" cat = "parallel" ph = "E"
             end
         end
     end

@@ -13,9 +13,9 @@ using ChromeTracing
 
 stream_trace("trace.json"; flush_interval=0.05)
 
-@tracepoint "startup" cat="app" args=Dict("msg" => "boot")
+@trace_event "startup" cat="app" args=Dict("msg" => "boot")
 
-@tracepoint "work" cat="compute" begin
+@trace_event "work" cat="compute" begin
     # your code
     sleep(0.01)
 end

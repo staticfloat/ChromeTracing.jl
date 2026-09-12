@@ -7,7 +7,7 @@ CurrentModule = ChromeTracing
 ## Recording events
 
 ```@docs
-@tracepoint
+@trace_event
 record_trace
 build_event
 ```

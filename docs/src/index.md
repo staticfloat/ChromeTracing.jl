@@ -10,7 +10,7 @@ ChromeTracing
 
 ## Recording events
 
-Events are recorded with the [`@tracepoint`](@ref) macro. In its single-argument
+Events are recorded with the [`@trace_event`](@ref) macro. In its single-argument
 form it emits an *instant* event; given a trailing `begin ... end` block it wraps
 the block in a matching pair of begin/end events, which the trace viewer renders
 as a span:
@@ -18,14 +18,14 @@ as a span:
 ```julia
 using ChromeTracing
 
-@tracepoint "startup" cat="app" args=Dict("msg" => "boot")
+@trace_event "startup" cat="app" args=Dict("msg" => "boot")
 
-@tracepoint "work" cat="compute" begin
+@trace_event "work" cat="compute" begin
     sleep(0.01)
 end
 ```
 
-Any keyword accepted by [`build_event`](@ref) may be passed to `@tracepoint`,
+Any keyword accepted by [`build_event`](@ref) may be passed to `@trace_event`,
 including `cat`, `ph`, `ts`, `pid`, `tid`, `dur` and `args`.
 
 ### One-shot Saving: `save_trace`
@@ -33,7 +33,7 @@ including `cat`, `ph`, `ts`, `pid`, `tid`, `dur` and `args`.
 Record everything into the in-memory buffer, then dump it at the end:
 
 ```julia
-@tracepoint "work" cat="compute" begin
+@trace_event "work" cat="compute" begin
     sleep(0.01)
 end
 
@@ -49,7 +49,7 @@ file is finalized into a valid JSON array:
 ```julia
 stream_trace("trace.json"; capacity=5000, flush_interval=0.05)
 
-@tracepoint "work" cat="compute" begin
+@trace_event "work" cat="compute" begin
     sleep(0.01)
 end
 

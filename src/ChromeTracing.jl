@@ -4,7 +4,7 @@
 Lightweight tracing for Julia programs, emitting Chrome trace event JSON files.
 See: https://docs.google.com/document/d/1CvAClvFfyA5R-PhYUmn5OOQtYMH4h6I0nSsKchNAySU
 
-Events are recorded with the [`@tracepoint`](@ref) macro into a lock-free ring
+Events are recorded with the [`@trace_event`](@ref) macro into a lock-free ring
 buffer, and are then either dumped all at once with [`save_trace`](@ref) or
 streamed to disk in the background with [`stream_trace`](@ref).
 
@@ -18,9 +18,9 @@ using ChromeTracing
 
 stream_trace("trace.json"; flush_interval=0.05)
 
-@tracepoint "startup" cat="app" args=Dict("msg" => "boot")
+@trace_event "startup" cat="app" args=Dict("msg" => "boot")
 
-@tracepoint "work" cat="compute" begin
+@trace_event "work" cat="compute" begin
     sleep(0.01)
 end
 
@@ -32,7 +32,7 @@ module ChromeTracing
 using JSON
 using Base.Threads
 
-export @tracepoint
+export @trace_event
 export save_trace, stream_trace, flush_trace!, stop_streaming!, clear_trace!
 
 """
@@ -391,7 +391,7 @@ then dump them all at the end.
 # Example
 
 ```julia
-@tracepoint "work" cat="compute" begin
+@trace_event "work" cat="compute" begin
     sleep(0.01)
 end
 save_trace("trace.json")
@@ -500,7 +500,7 @@ If a stream is already running it is stopped and finalized first.  Call
 
 ```julia
 stream = stream_trace("trace.json"; capacity=5000, flush_interval=0.05)
-@tracepoint "work" cat="compute" begin
+@trace_event "work" cat="compute" begin
     sleep(0.01)
 end
 stop_streaming!()
@@ -533,7 +533,7 @@ end
     record_trace(name; kwargs...)
 
 Build an event with [`build_event`](@ref) and append it to the global trace
-buffer.  This is what [`@tracepoint`](@ref) expands to; call it directly when
+buffer.  This is what [`@trace_event`](@ref) expands to; call it directly when
 the event's name or keywords are only known at runtime.
 
 The event is dropped silently if the buffer is full.
@@ -547,8 +547,8 @@ function record_trace(name; kwargs...)
 end
 
 """
-    @tracepoint name [key=value...]
-    @tracepoint name [key=value...] begin ... end
+    @trace_event name [key=value...]
+    @trace_event name [key=value...] begin ... end
 
 Record a Chrome trace event named `name`.
 
@@ -564,14 +564,14 @@ closed even if the body throws.
 # Examples
 
 ```julia
-@tracepoint "startup" cat="app" args=Dict("msg" => "boot")
+@trace_event "startup" cat="app" args=Dict("msg" => "boot")
 
-@tracepoint "work" cat="compute" begin
+@trace_event "work" cat="compute" begin
     sleep(0.01)
 end
 ```
 """
-macro tracepoint(name, kws...)
+macro trace_event(name, kws...)
     if !isempty(kws) && kws[end] isa Expr && kws[end].head === :block
         block = kws[end]
         block_args = kws[1:(end - 1)]
@@ -586,11 +586,11 @@ macro tracepoint(name, kws...)
             key = kw.args[1]
             val = kw.args[2]
             if !(key isa Symbol)
-                error("@tracepoint expects keyword arguments like cat=\"perf\", ph=\"i\".")
+                error("@trace_event expects keyword arguments like cat=\"perf\", ph=\"i\".")
             end
             push!(kw_exprs, Expr(:kw, key, esc(val)))
         else
-            error("@tracepoint expects keyword arguments like cat=\"perf\", ph=\"i\".")
+            error("@trace_event expects keyword arguments like cat=\"perf\", ph=\"i\".")
         end
     end
         
