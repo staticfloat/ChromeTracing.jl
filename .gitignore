@@ -1,2 +1,6 @@
 Manifest.toml
 .vscode/
+docs/build/
+docs/Manifest.toml
+.julia/
+*.cov

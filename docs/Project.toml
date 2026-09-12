@@ -1,0 +1,6 @@
+[deps]
+ChromeTracing = "845b99d9-bb87-4db2-9e0c-3c6f94fbefc3"
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+
+[compat]
+Documenter = "1"
